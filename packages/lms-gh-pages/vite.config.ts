@@ -5,4 +5,12 @@ import { defineConfig } from "vite";
 export default defineConfig({
   base: "./",
   plugins: [react()],
+  resolve: {
+    alias: {
+      "@lmstudio/lms-isomorphic": "@lmstudio/lms-isomorphic/dist/esm/browser.js",
+    },
+  },
+  optimizeDeps: {
+    include: ["@lmstudio/sdk"],
+  },
 });
