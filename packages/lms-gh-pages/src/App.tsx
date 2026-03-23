@@ -1,12 +1,14 @@
 import {
   Chat,
   LMStudioClient,
+  tool,
   type ChatMessageInput,
   type LLMInfo,
   type LLMInstanceInfo,
   type LLMPredictionConfigInput,
 } from "@lmstudio/sdk";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { z } from "zod";
 import "./App.css";
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
@@ -451,33 +453,113 @@ export default function App() {
       ];
       const chat = Chat.from(updatedHistory);
       const model = await ensureModelLoaded(activeModelKey);
-      const prediction = model.respond(chat, buildPredictionConfig());
-      activePrediction.current = prediction;
+      const predConfig = buildPredictionConfig() as any;
 
       let assembled = "";
       let reasoning = "";
-      for await (const fragment of prediction) {
-        if (fragment.reasoningType === "reasoning") {
-          reasoning += fragment.content;
-        } else {
-          assembled += fragment.content;
-        }
-        setStreamingReply({ content: assembled, reasoning });
+
+      let sdkTools: any[] = [];
+      if (predConfig.tools && Array.isArray(predConfig.tools)) {
+        sdkTools = predConfig.tools.map((t: any) => {
+          const tParams: Record<string, any> = {};
+          if (t.function?.parameters?.properties) {
+            for (const key of Object.keys(t.function.parameters.properties)) {
+              tParams[key] = z.any().describe(t.function.parameters.properties[key].description || "");
+            }
+          }
+          return tool({
+            name: t.function?.name || "unknown",
+            description: t.function?.description || "",
+            parameters: tParams,
+            implementation: async (args) => {
+              const msg = `[Remote tool executed: ${t.function?.name}]`;
+              console.log(msg, args);
+              return JSON.stringify({ success: true, fake_data: `Mock result for ${t.function?.name}` });
+            }
+          });
+        });
+        delete predConfig.tools; // remove from raw config
       }
-      const result = await prediction;
-      setPredictionStats({
-        tokens: result.stats.predictedTokensCount ?? result.stats.totalTokensCount ?? 0,
-        stopReason: result.stats.stopReason,
-      });
-      setChatHistory([
-        ...chatHistory,
-        { role: "user", content: userMessage, images: handles },
-        {
-          role: "assistant",
-          content: knobs.reasoningEnabled ? result.nonReasoningContent : result.content,
-          _reasoning: knobs.reasoningEnabled ? result.reasoningContent : undefined,
-        },
-      ]);
+
+      if (sdkTools.length > 0) {
+        const actPredictionContext = { cancel: () => {} };
+        activePrediction.current = actPredictionContext as any; 
+        
+        let lastAssembled = "";
+        let lastReasoning = "";
+
+        const result = await model.act(chat, sdkTools, {
+          ...predConfig,
+          onPredictionFragment: (fragment: any) => {
+            if (fragment.reasoningType === "reasoning") {
+              lastReasoning += fragment.content;
+            } else {
+              lastAssembled += fragment.content;
+            }
+            setStreamingReply({ content: lastAssembled, reasoning: lastReasoning });
+          },
+          onRoundStart: () => {
+             if (lastAssembled.length > 0 || lastReasoning.length > 0) {
+               lastAssembled += "\n\n";
+             }
+          }
+        });
+
+        setPredictionStats({
+          tokens: 0,
+          stopReason: "act_ended",
+        });
+
+        const historyAfter = chat.getHistory();
+        const nonUserMessages = historyAfter.slice(updatedHistory.length).map((h: any) => {
+           let strContent = h.content;
+           if (Array.isArray(h.content)) {
+               strContent = h.content.map((p: any) => {
+                   if (p.type === "text") return p.text;
+                   if (p.type === "toolCallRequest") return `(Tool Call: ${p.toolCallRequest.name})`;
+                   return JSON.stringify(p);
+               }).join('\n');
+           }
+           return String(h.role).toUpperCase() + ":\n" + strContent;
+        });
+
+        setChatHistory([
+          ...chatHistory,
+          { role: "user", content: userMessage, images: handles },
+          {
+            role: "assistant",
+            content: nonUserMessages.join('\n\n---\n\n'),
+            _reasoning: knobs.reasoningEnabled ? lastReasoning : undefined,
+          },
+        ]);
+
+      } else {
+        const prediction = model.respond(chat, predConfig);
+        activePrediction.current = prediction;
+
+        for await (const fragment of prediction) {
+          if (fragment.reasoningType === "reasoning") {
+            reasoning += fragment.content;
+          } else {
+            assembled += fragment.content;
+          }
+          setStreamingReply({ content: assembled, reasoning });
+        }
+        const result = await prediction;
+        setPredictionStats({
+          tokens: result.stats.predictedTokensCount ?? result.stats.totalTokensCount ?? 0,
+          stopReason: result.stats.stopReason,
+        });
+        setChatHistory([
+          ...chatHistory,
+          { role: "user", content: userMessage, images: handles },
+          {
+            role: "assistant",
+            content: knobs.reasoningEnabled ? result.nonReasoningContent : result.content,
+            _reasoning: knobs.reasoningEnabled ? result.reasoningContent : undefined,
+          },
+        ]);
+      }
       setStreamingReply({ content: "", reasoning: "" });
       setUserMessage("");
       setAttachedFiles([]);
