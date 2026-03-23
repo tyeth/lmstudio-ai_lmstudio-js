@@ -2,9 +2,9 @@ import {
   Chat,
   LMStudioClient,
   type ChatMessageInput,
-  type LLMPredictionConfigInput,
-  type LLMInstanceInfo,
   type LLMInfo,
+  type LLMInstanceInfo,
+  type LLMPredictionConfigInput,
 } from "@lmstudio/sdk";
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
@@ -158,7 +158,7 @@ export default function App() {
 
   const [activeModelKey, setActiveModelKey] = useState("");
 
-  const [chatHistory, setChatHistory] = useState<ChatMessageInput[]>([]);
+  const [chatHistory, setChatHistory] = useState<(ChatMessageInput & { _reasoning?: string })[]>([]);
   const [userMessage, setUserMessage] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [streamingReply, setStreamingReply] = useState<{ content: string; reasoning: string }>({
@@ -170,7 +170,7 @@ export default function App() {
   const [isSending, setIsSending] = useState(false);
   const activePrediction = useRef<any>(null);
 
-  const [advancedConfigText, setAdvancedConfigText] = useState('{\n  "toolChoice": {"type": "auto"}\n}');
+  const [advancedConfigText, setAdvancedConfigText] = useState('{\n  "toolChoice": {"type": "generic", "mode": "auto"}\n}');
   const [advancedConfigError, setAdvancedConfigError] = useState<string | null>(null);
 
   const [knobs, setKnobs] = useState<GenerationKnobs>({
@@ -179,7 +179,7 @@ export default function App() {
     topK: "40",
     repeatPenalty: "1.1",
     presencePenalty: "0.3",
-    maxTokens: "256",
+    maxTokens: "256000",
     contextOverflowPolicy: "rollingWindow",
     stopStrings: "",
     draftModel: "",
@@ -440,8 +440,13 @@ export default function App() {
               }),
             );
 
+      const pureHistory: ChatMessageInput[] = chatHistory.map(m => ({
+        role: m.role,
+        content: m.content,
+        images: m.images,
+      }));
       const updatedHistory: ChatMessageInput[] = [
-        ...chatHistory,
+        ...pureHistory,
         { role: "user", content: userMessage, images: handles },
       ];
       const chat = Chat.from(updatedHistory);
@@ -464,7 +469,15 @@ export default function App() {
         tokens: result.stats.predictedTokensCount ?? result.stats.totalTokensCount ?? 0,
         stopReason: result.stats.stopReason,
       });
-      setChatHistory([...updatedHistory, { role: "assistant", content: result.content }]);
+      setChatHistory([
+        ...chatHistory,
+        { role: "user", content: userMessage, images: handles },
+        {
+          role: "assistant",
+          content: knobs.reasoningEnabled ? result.nonReasoningContent : result.content,
+          _reasoning: knobs.reasoningEnabled ? result.reasoningContent : undefined,
+        },
+      ]);
       setStreamingReply({ content: "", reasoning: "" });
       setUserMessage("");
       setAttachedFiles([]);
@@ -489,6 +502,7 @@ export default function App() {
     renderedHistory.push({
       role: "assistant",
       content: streamingReply.content,
+      _reasoning: streamingReply.reasoning,
     });
   }
 
@@ -522,14 +536,14 @@ export default function App() {
       </header>
 
       <section className="grid">
-        <div className="card">
-          <div className="card-header">
+        <details className="card" open>
+          <summary className="card-header">
             <div>
               <p className="eyebrow">Connection</p>
               <h3>Target LM Studio server</h3>
             </div>
             <span className={`status ${connectionState}`}>{connectionState}</span>
-          </div>
+          </summary>
 
           <div className="form-grid">
             <label>
@@ -566,10 +580,10 @@ export default function App() {
             </label>
           </div>
           {connectionError ? <div className="callout error">{connectionError}</div> : null}
-        </div>
+        </details>
 
-        <div className="card">
-          <div className="card-header">
+        <details className="card" open>
+          <summary className="card-header">
             <div>
               <p className="eyebrow">Models</p>
               <h3>Downloaded + loaded</h3>
@@ -579,7 +593,7 @@ export default function App() {
                 Refresh
               </button>
             </div>
-          </div>
+          </summary>
 
           <div className="mini-grid">
             <div className="stack">
@@ -654,10 +668,10 @@ export default function App() {
               {loadingModel ? "Loading…" : "Load model"}
             </button>
           </div>
-        </div>
+        </details>
 
-        <div className="card rest-card">
-          <div className="card-header">
+        <details className="card rest-card">
+          <summary className="card-header">
             <div>
               <p className="eyebrow">REST browse</p>
               <h3>/v1/models</h3>
@@ -667,7 +681,7 @@ export default function App() {
                 Pull list
               </button>
             </div>
-          </div>
+          </summary>
           {restError ? <div className="callout error">{restError}</div> : null}
           <div className="rest-list">
             {restModels.length === 0 ? <p className="muted">No REST models yet. Hit “Pull list”.</p> : null}
@@ -683,29 +697,30 @@ export default function App() {
               </div>
             ))}
           </div>
-        </div>
+        </details>
       </section>
 
-      <section className="card playground">
-        <div className="card-header">
-          <div>
-            <p className="eyebrow">Playground</p>
-            <h3>Chat, vision, and streaming</h3>
-          </div>
-          <div className="card-actions">
-            <span className="chip subtle">Active model: {activeModelKey || "none"}</span>
-            <button className="button ghost" onClick={cancelPrediction} disabled={!isSending}>
-              Stop
-            </button>
-            <button className="button primary" onClick={sendMessage} disabled={isSending || !isConnected}>
-              {isSending ? "Streaming…" : "Send"}
-            </button>
-          </div>
-        </div>
+      <section className="playground">
+        <details className="card" open>
+          <summary className="card-header">
+            <div>
+              <p className="eyebrow">Playground</p>
+              <h3>Chat, vision, and streaming</h3>
+            </div>
+            <div className="card-actions">
+              <span className="chip subtle">Active model: {activeModelKey || "none"}</span>
+              <button className="button ghost" onClick={cancelPrediction} disabled={!isSending}>
+                Stop
+              </button>
+              <button className="button primary" onClick={sendMessage} disabled={isSending || !isConnected}>
+                {isSending ? "Streaming…" : "Send"}
+              </button>
+            </div>
+          </summary>
 
-        <div className="playground-grid">
-          <div className="stack">
-            <h4>Generation knobs</h4>
+          <div className="playground-grid">
+          <details className="stack">
+            <summary><h4>Generation knobs</h4></summary>
             <div className="form-grid slim">
               <label>
                 Temperature
@@ -807,10 +822,10 @@ export default function App() {
               </label>
             </div>
             {advancedConfigError ? <div className="callout error">{advancedConfigError}</div> : null}
-          </div>
+          </details>
 
-          <div className="stack">
-            <h4>Message + attachments</h4>
+          <details className="stack" open>
+            <summary><h4>Message + attachments</h4></summary>
             <textarea
               className="prompt"
               value={userMessage}
@@ -841,10 +856,10 @@ export default function App() {
                 {predictionStats.stopReason ? ` · stop: ${predictionStats.stopReason}` : ""}
               </div>
             ) : null}
-          </div>
+          </details>
 
-          <div className="stack transcript">
-            <h4>Transcript</h4>
+          <details className="stack transcript" open>
+            <summary><h4>Transcript</h4></summary>
             <div className="chat">
               {renderedHistory.length === 0 ? <p className="muted">No messages yet.</p> : null}
               {renderedHistory.map((message, idx) => (
@@ -852,15 +867,19 @@ export default function App() {
                   <div className="bubble-meta">
                     <span className="chip subtle">{message.role}</span>
                   </div>
-                  <p>{message.content}</p>
-                  {message.role === "assistant" && streamingReply.reasoning && idx === renderedHistory.length - 1 ? (
-                    <p className="reasoning">Thinking: {streamingReply.reasoning}</p>
+                  {message.role === "assistant" && message._reasoning ? (
+                    <details className="reasoning-details" open>
+                      <summary>Thinking Process</summary>
+                      <div className="reasoning-content">{message._reasoning}</div>
+                    </details>
                   ) : null}
+                  <p>{message.content}</p>
                 </div>
               ))}
             </div>
-          </div>
+          </details>
         </div>
+        </details>
       </section>
     </div>
   );

@@ -1,0 +1,25 @@
+
+details.stack > summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none; /* Hide default arrow */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+details.stack > summary::-webkit-details-marker {
+  display: none;
+}
+details.stack > summary:before {
+  content: "▼";
+  font-size: 10px;
+  color: #687184;
+  transform: rotate(-90deg);
+  transition: transform 0.2s ease;
+}
+details.stack[open] > summary:before {
+  transform: rotate(0deg);
+}
+details.stack > summary h4 {
+  margin: 0;
+}
